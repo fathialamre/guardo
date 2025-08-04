@@ -50,15 +50,17 @@ class GuardoConfig {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  Icons.security_outlined,
+                  Icons.fingerprint,
                   size: 80,
                   color: Theme.of(context).colorScheme.primary,
+                  semanticLabel: 'Biometric authentication icon',
                 ),
                 const SizedBox(height: 24),
                 const Text(
                   'App Locked',
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                   textAlign: TextAlign.center,
+                  semanticsLabel: 'Application is currently locked',
                 ),
                 const SizedBox(height: 16),
                 Text(
@@ -66,11 +68,20 @@ class GuardoConfig {
                   style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                   textAlign: TextAlign.center,
                 ),
+                const SizedBox(height: 8),
+                Text(
+                  'Touch the button to use biometric authentication',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 32),
                 ElevatedButton.icon(
                   onPressed: onTap,
                   icon: const Icon(Icons.fingerprint),
-                  label: const Text('Unlock'),
+                  label: const Text('Unlock with Biometrics'),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 32,
@@ -104,5 +115,39 @@ class GuardoConfig {
       lockTimeout: lockTimeout ?? this.lockTimeout,
       autoCheckOnStart: autoCheckOnStart ?? this.autoCheckOnStart,
     );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is GuardoConfig &&
+        other.localizedReason == localizedReason &&
+        other.authenticationOptions == authenticationOptions &&
+        other.biometricOnly == biometricOnly &&
+        other.stickyAuth == stickyAuth &&
+        other.lockTimeout == lockTimeout &&
+        other.autoCheckOnStart == autoCheckOnStart;
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(
+      localizedReason,
+      authenticationOptions,
+      biometricOnly,
+      stickyAuth,
+      lockTimeout,
+      autoCheckOnStart,
+    );
+  }
+
+  @override
+  String toString() {
+    return 'GuardoConfig('
+        'localizedReason: $localizedReason, '
+        'biometricOnly: $biometricOnly, '
+        'stickyAuth: $stickyAuth, '
+        'lockTimeout: $lockTimeout, '
+        'autoCheckOnStart: $autoCheckOnStart)';
   }
 }

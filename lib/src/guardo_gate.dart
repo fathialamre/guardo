@@ -5,6 +5,179 @@ import 'package:flutter/material.dart';
 import 'guardo_service.dart';
 import 'guardo_config.dart';
 
+/// Sealed class representing the different authentication states
+sealed class GuardoState {
+  const GuardoState();
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other.runtimeType == runtimeType;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+}
+
+/// State when checking authentication
+class CheckingState extends GuardoState {
+  const CheckingState();
+}
+
+/// State when user is authenticated
+class AuthenticatedState extends GuardoState {
+  const AuthenticatedState();
+}
+
+/// State when showing lock screen
+class LockScreenState extends GuardoState {
+  const LockScreenState();
+}
+
+/// State when authentication failed with error
+class ErrorState extends GuardoState {
+  final String message;
+  const ErrorState(this.message);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is ErrorState && other.message == message;
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, message);
+}
+
+/// State when authentication failed (no biometrics available, user cancelled, etc.)
+class FailedState extends GuardoState {
+  final String? message;
+  const FailedState([this.message]);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is FailedState && other.message == message;
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, message);
+}
+
+/// State notifier for managing Guardo authentication state
+class GuardoStateNotifier extends ChangeNotifier {
+  GuardoState _state;
+  final GuardoService _guardoService;
+  final GuardoConfig _config;
+  Timer? _lockTimer;
+
+  GuardoStateNotifier({
+    required GuardoService guardoService,
+    required GuardoConfig config,
+    GuardoState? initialState,
+  }) : _guardoService = guardoService,
+       _config = config,
+       _state = initialState ?? const CheckingState();
+
+  GuardoState get state => _state;
+  GuardoService get service => _guardoService;
+  GuardoConfig get config => _config;
+
+  bool get isAuthenticated => _state is AuthenticatedState;
+
+  void _setState(GuardoState newState) {
+    if (_state != newState) {
+      _state = newState;
+      notifyListeners();
+    }
+  }
+
+  void startLockTimer() {
+    _lockTimer?.cancel();
+
+    if (_config.lockTimeout != null && _state is AuthenticatedState) {
+      _lockTimer = Timer(_config.lockTimeout!, () {
+        if (_state is AuthenticatedState) {
+          _setState(const LockScreenState());
+        }
+      });
+    }
+  }
+
+  void resetLockTimer() {
+    if (_state is AuthenticatedState) {
+      startLockTimer();
+    }
+  }
+
+  void showLockScreen() {
+    _setState(const LockScreenState());
+  }
+
+  Future<void> authenticate() async {
+    _setState(const CheckingState());
+
+    try {
+      final authenticated = await _guardoService.authenticate();
+      if (authenticated) {
+        _setState(const AuthenticatedState());
+        startLockTimer();
+      } else if (!_config.autoCheckOnStart) {
+        _setState(const LockScreenState());
+      } else {
+        _setState(const FailedState('Authentication failed'));
+      }
+    } catch (e) {
+      if (_config.autoCheckOnStart) {
+        _setState(ErrorState(e.toString()));
+      } else {
+        _setState(const LockScreenState());
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _lockTimer?.cancel();
+    super.dispose();
+  }
+}
+
+/// InheritedWidget that provides access to GuardoStateNotifier
+class GuardoInherited extends InheritedWidget {
+  final GuardoStateNotifier stateNotifier;
+
+  const GuardoInherited({
+    super.key,
+    required this.stateNotifier,
+    required super.child,
+  });
+
+  static GuardoStateNotifier? maybeOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<GuardoInherited>()
+        ?.stateNotifier;
+  }
+
+  static GuardoStateNotifier of(BuildContext context) {
+    final result = maybeOf(context);
+    if (result == null) {
+      throw FlutterError(
+        'GuardoInherited.of() called with a context that does not contain a GuardoInherited.\n'
+        'No GuardoInherited ancestor could be found starting from the context that was passed to GuardoInherited.of().\n'
+        'The context used was:\n'
+        '  $context',
+      );
+    }
+    return result;
+  }
+
+  @override
+  bool updateShouldNotify(GuardoInherited oldWidget) {
+    return stateNotifier != oldWidget.stateNotifier;
+  }
+}
+
 /// A widget that provides a biometric authentication gate for your app
 ///
 /// This widget will handle the authentication flow and only show the
@@ -53,36 +226,49 @@ class Guardo extends StatefulWidget {
 }
 
 class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
-  late final GuardoService _guardoService;
+  late final GuardoStateNotifier _stateNotifier;
   late final GuardoConfig _config;
-  bool _isChecking = false;
-  bool _isAuthenticated = false;
-  bool _showLockScreen = false;
-  bool _isError = false;
-  String? _errorMessage;
-  Timer? _lockTimer;
 
   @override
   void initState() {
     super.initState();
-    _guardoService =
+    final guardoService =
         widget.guardoService ?? GuardoService(config: widget.config);
-    _config = widget.config ?? _guardoService.config;
+    _config = widget.config ?? guardoService.config;
+
+    // Initialize state notifier with appropriate initial state
+    final initialState = _config.autoCheckOnStart
+        ? const CheckingState()
+        : const LockScreenState();
+
+    _stateNotifier = GuardoStateNotifier(
+      guardoService: guardoService,
+      config: _config,
+      initialState: initialState,
+    );
+
+    _stateNotifier.addListener(_onStateChanged);
     WidgetsBinding.instance.addObserver(this);
 
-    // Check if we should auto-check on start or show lock screen
+    // Check if we should auto-check on start
     if (_config.autoCheckOnStart) {
-      _checkAuthentication();
-    } else {
-      setState(() {
-        _showLockScreen = true;
-      });
+      _stateNotifier.authenticate();
+    }
+  }
+
+  void _onStateChanged() {
+    if (mounted) {
+      setState(() {});
+
+      // Notify parent about authentication state changes
+      widget.onAuthenticationChanged?.call(_stateNotifier.isAuthenticated);
     }
   }
 
   @override
   void dispose() {
-    _lockTimer?.cancel();
+    _stateNotifier.removeListener(_onStateChanged);
+    _stateNotifier.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -94,90 +280,22 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
     // Re-authenticate when app comes back to foreground
     if (state == AppLifecycleState.resumed &&
         widget.autoRetry &&
-        !_isAuthenticated) {
+        !_stateNotifier.isAuthenticated) {
       if (_config.autoCheckOnStart) {
-        _checkAuthentication();
+        _stateNotifier.authenticate();
       } else {
-        setState(() {
-          _showLockScreen = true;
-        });
+        _stateNotifier.showLockScreen();
       }
     }
 
-    // Pause/resume the lock timer based on app lifecycle
-    if (state == AppLifecycleState.paused) {
-      _lockTimer?.cancel();
-    } else if (state == AppLifecycleState.resumed && _isAuthenticated) {
-      _startLockTimer();
-    }
-  }
-
-  void _startLockTimer() {
-    _lockTimer?.cancel();
-
-    if (_config.lockTimeout != null && _isAuthenticated) {
-      _lockTimer = Timer(_config.lockTimeout!, () {
-        if (mounted && _isAuthenticated) {
-          setState(() {
-            _isAuthenticated = false;
-            _showLockScreen = true;
-          });
-          widget.onAuthenticationChanged?.call(false);
-        }
-      });
-    }
-  }
-
-  void _resetLockTimer() {
-    if (_isAuthenticated) {
-      _startLockTimer();
+    // Resume the lock timer when app comes back to foreground
+    if (state == AppLifecycleState.resumed && _stateNotifier.isAuthenticated) {
+      _stateNotifier.startLockTimer();
     }
   }
 
   void _onUnlockPressed() {
-    setState(() {
-      _showLockScreen = false;
-    });
-    _checkAuthentication();
-  }
-
-  Future<void> _checkAuthentication() async {
-    setState(() {
-      _isChecking = true;
-      _errorMessage = null;
-      _isError = false;
-      _showLockScreen = false;
-    });
-
-    try {
-      final authenticated = await _guardoService.authenticate();
-      setState(() {
-        _isAuthenticated = authenticated;
-        _isChecking = false;
-        _isError = false;
-        _showLockScreen = false;
-      });
-
-      if (authenticated) {
-        _startLockTimer();
-      } else if (!_config.autoCheckOnStart) {
-        setState(() {
-          _showLockScreen = true;
-        });
-      }
-
-      widget.onAuthenticationChanged?.call(authenticated);
-    } catch (e) {
-      setState(() {
-        _isAuthenticated = false;
-        _isChecking = false;
-        _isError = true;
-        _errorMessage = e.toString();
-        _showLockScreen = !_config.autoCheckOnStart;
-      });
-
-      widget.onAuthenticationChanged?.call(false);
-    }
+    _stateNotifier.authenticate();
   }
 
   Widget _buildLoadingWidget() {
@@ -188,12 +306,14 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  !Platform.isAndroid
+                  Platform.isIOS
                       ? const CupertinoActivityIndicator()
-                      : const CupertinoActivityIndicator(),
+                      : const CircularProgressIndicator(),
                   const SizedBox(height: 16),
-                  SizedBox(height: 16),
-                  Text('Checking authentication...'),
+                  const Text(
+                    'Checking authentication...',
+                    semanticsLabel: 'Checking your authentication status',
+                  ),
                 ],
               ),
             ),
@@ -202,10 +322,6 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
   }
 
   Widget _buildLockScreenWidget() {
-    // Priority order:
-    // 2. Custom lockScreen callback from Guardo widget
-    // 3. Default lock screen built from individual properties
-
     if (widget.lockScreen != null) {
       return widget.lockScreen!(context, _onUnlockPressed);
     }
@@ -214,7 +330,7 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
     return _config.buildDefaultLockScreen(context, _onUnlockPressed);
   }
 
-  Widget _buildFailedWidget() {
+  Widget _buildFailedWidget([String? message]) {
     return widget.failedWidget ??
         MaterialApp(
           home: Scaffold(
@@ -222,18 +338,24 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.security, size: 64, color: Colors.red),
+                  const Icon(
+                    Icons.security,
+                    size: 64,
+                    color: Colors.red,
+                    semanticLabel: 'Security warning icon',
+                  ),
                   const SizedBox(height: 16),
                   const Text(
                     "Authentication Failed",
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    semanticsLabel: 'Authentication has failed',
                   ),
-                  if (_errorMessage != null) ...[
+                  if (message != null) ...[
                     const SizedBox(height: 8),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 32),
                       child: Text(
-                        _errorMessage!,
+                        message,
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey[600]),
                       ),
@@ -242,10 +364,12 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
                   const SizedBox(height: 24),
                   ElevatedButton.icon(
                     onPressed: _config.autoCheckOnStart
-                        ? _checkAuthentication
+                        ? () => _stateNotifier.authenticate()
                         : _onUnlockPressed,
                     icon: const Icon(Icons.refresh),
-                    label: Text(_config.autoCheckOnStart ? "Try Again" : ""),
+                    label: Text(
+                      _config.autoCheckOnStart ? "Try Again" : "Unlock",
+                    ),
                   ),
                 ],
               ),
@@ -254,33 +378,37 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
         );
   }
 
-  Widget _buildErrorWidget() {
+  Widget _buildErrorWidget(String message) {
     return MaterialApp(
       home: Scaffold(
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.error_outline, size: 64, color: Colors.orange),
+              const Icon(
+                Icons.fingerprint_outlined,
+                size: 64,
+                color: Colors.orange,
+                semanticLabel: 'Biometric authentication error icon',
+              ),
               const SizedBox(height: 16),
               const Text(
                 "Authentication Error",
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                semanticsLabel: 'Authentication error occurred',
               ),
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Text(
-                    _errorMessage!,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey[600]),
-                  ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey[600]),
                 ),
-              ],
+              ),
               const SizedBox(height: 24),
               ElevatedButton.icon(
-                onPressed: _checkAuthentication,
+                onPressed: () => _stateNotifier.authenticate(),
                 icon: const Icon(Icons.refresh),
                 label: const Text("Retry"),
               ),
@@ -293,28 +421,20 @@ class _GuardoState extends State<Guardo> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    if (_isChecking) {
-      return _buildLoadingWidget();
-    }
-
-    if (_isError) {
-      return _buildErrorWidget();
-    }
-
-    if (_showLockScreen) {
-      return _buildLockScreenWidget();
-    }
-
-    if (_isAuthenticated) {
-      // Wrap the authenticated content with a Listener to detect user activity
-      return Listener(
-        onPointerDown: (_) => _resetLockTimer(),
-        onPointerMove: (_) => _resetLockTimer(),
-        onPointerUp: (_) => _resetLockTimer(),
-        child: widget.child,
-      );
-    }
-
-    return _buildFailedWidget();
+    return GuardoInherited(
+      stateNotifier: _stateNotifier,
+      child: switch (_stateNotifier.state) {
+        CheckingState() => _buildLoadingWidget(),
+        ErrorState(:final message) => _buildErrorWidget(message),
+        LockScreenState() => _buildLockScreenWidget(),
+        AuthenticatedState() => Listener(
+          onPointerDown: (_) => _stateNotifier.resetLockTimer(),
+          onPointerMove: (_) => _stateNotifier.resetLockTimer(),
+          onPointerUp: (_) => _stateNotifier.resetLockTimer(),
+          child: widget.child,
+        ),
+        FailedState(:final message) => _buildFailedWidget(message),
+      },
+    );
   }
 }
