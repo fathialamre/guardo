@@ -1,0 +1,6 @@
+# Ignore lock files and IDE files
+example/ios/Podfile.lock
+example/pubspec.lock
+.idea/
+guardo.iml
+*.iml 

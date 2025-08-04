@@ -8,8 +8,6 @@ topics:
   - authentication
   - biometric
   - app-lock
-  - flutter
-  - lifecycle
   - privacy
 
 environment:
