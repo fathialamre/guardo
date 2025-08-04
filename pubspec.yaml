@@ -1,7 +1,16 @@
 name: guardo
 description: "A Flutter package that provides secure app entry point with auto-locking, biometric authentication, and lifecycle management."
 version: 0.0.1
-homepage:
+homepage: https://github.com/fathialamre/guardo
+
+topics:
+  - security
+  - authentication
+  - biometric
+  - app-lock
+  - flutter
+  - lifecycle
+  - privacy
 
 environment:
   sdk: ^3.8.1

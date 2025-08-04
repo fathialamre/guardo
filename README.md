@@ -80,18 +80,50 @@ Add Guardo to your `pubspec.yaml` file:
 
 ```yaml
 dependencies:
-  guardo: ^1.0.0
+  guardo: ^0.0.1
 ```
 
 ### Platform Setup
 
 #### Android
+
+**Android Integration**
+* The plugin will build and run on SDK 16+, but `isDeviceSupported()` will always return false before SDK 23 (Android 6.0).
+
 Add the following permissions to `android/app/src/main/AndroidManifest.xml`:
 
 ```xml
 <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 ```
+
+**Activity Changes**
+
+Note that local_auth requires the use of a FragmentActivity instead of an Activity. To update your application:
+
+* If you are using FlutterActivity directly, change it to FlutterFragmentActivity in your AndroidManifest.xml.
+
+* If you are using a custom activity, update your MainActivity.java:
+
+```java
+import io.flutter.embedding.android.FlutterFragmentActivity;
+
+public class MainActivity extends FlutterFragmentActivity {
+    // ...
+}
+```
+
+or MainActivity.kt:
+
+```kotlin
+import io.flutter.embedding.android.FlutterFragmentActivity
+
+class MainActivity: FlutterFragmentActivity() {
+    // ...
+}
+```
+
+to inherit from FlutterFragmentActivity.
 
 #### iOS
 Add the following to `ios/Runner/Info.plist`:
@@ -1708,7 +1740,7 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/guardo.git
+git clone https://github.com/fathialamre/guardo.git
 
 # Install dependencies
 flutter pub get
